@@ -6,7 +6,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# === FORCE LOGS (Render ab koi log nahi chupa payega) ===
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
@@ -16,7 +15,7 @@ API_ID = 33603340
 API_HASH = "0f1a7f670519f9e44d0d7fdb6aa8efba"
 BOT_TOKEN = "7874642792:AAF08vl1-qcMUHOIUZrL5IwJS1A7zoD5ucw"
 
-# --- 1. DUMMY WEB SERVER (Render ko chup rakhne ke liye) ---
+# --- 1. DUMMY WEB SERVER ---
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -31,8 +30,8 @@ def run_web_server():
     print(f"🌐 Web Server Port {port} par chal gaya hai!", flush=True)
     httpd.serve_forever()
 
-# Server ko alag background raste par bhej diya
 threading.Thread(target=run_web_server, daemon=True).start()
+
 
 # --- 2. TELEGRAM BOT CODE ---
 print("⏳ Telegram Bot connect ho raha hai...", flush=True)
@@ -55,9 +54,23 @@ async def start_command(client, message):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("➕ Add Bot To Channel ➕", url=add_link)]])
     await message.reply_text(text, reply_markup=keyboard)
 
-@app.on_message(filters.command("acceptall") & filters.admin)
+
+# =======================================================
+# YAHAN FIX KIYA HAI: 'filters.admin' hata kar naya code lagaya hai
+# =======================================================
+@app.on_message(filters.command("acceptall") & filters.group | filters.channel)
 async def approve_all_requests(client, message):
     chat_id = message.chat.id
+    
+    # Ye check karega ki message bhejne wala Admin hai ya nahi
+    try:
+        user_id = message.from_user.id
+        member = await client.get_chat_member(chat_id, user_id)
+        if member.status not in ["creator", "administrator"]:
+            return  # Agar admin nahi hai, toh bot kuch nahi karega
+    except:
+        pass # Agar channel hai (user id nahi aati), toh by default allow karega
+
     msg = await message.reply_text("Saari pending requests approve ho rahi hain... thoda wait karein.")
     try:
         await client.approve_all_chat_join_requests(chat_id)
@@ -65,7 +78,7 @@ async def approve_all_requests(client, message):
     except Exception as e:
         await msg.edit_text(f"❌ Error aaya: {e}")
 
-# --- BOT KO START KARNE KA SABSE BADIYA TARIKA ---
+
 if __name__ == "__main__":
     try:
         print("🚀 BOT KO START KIYA JA RAHA HAI...", flush=True)
