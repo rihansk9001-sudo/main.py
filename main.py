@@ -1,136 +1,132 @@
-import sys
 import os
-import threading
-import traceback
+import sys
 import asyncio
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-# === PYTHON FIX ===
-try:
-    loop = asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-from pyrogram import Client, filters
+import logging
+from pyrogram import Client, filters, idle
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import FloodWait
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
 
-print("🚀 SCRIPT START HUI...", flush=True)
+# Logging setup taaki Render par error dikhe
+logging.basicConfig(level=logging.INFO)
 
-# Aapki API aur Admin Details
+# --- CONFIGURATION ---
 API_ID = 33603340
 API_HASH = "0f1a7f670519f9e44d0d7fdb6aa8efba"
 BOT_TOKEN = "7874642792:AAF08vl1-qcMUHOIUZrL5IwJS1A7zoD5ucw"
-ADMIN_ID = 1484173564  # Aapki Admin ID
+ADMIN_ID = 1484173564  # Aapki ID
 
-# Database (File) functions taaki Render restart hone par channels na udey
-DB_FILE = "channels.txt"
+# Database file (Simple text file to store channel IDs)
+DB_FILE = "chats.txt"
 
-def load_channels():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r") as f:
-            return set(f.read().splitlines())
-    return set()
+def get_chats():
+    if not os.path.exists(DB_FILE): return []
+    with open(DB_FILE, "r") as f:
+        return [int(line.strip()) for line in f.readlines() if line.strip()]
 
-def save_channel(chat_id):
-    channels = load_channels()
-    channels.add(str(chat_id))
-    with open(DB_FILE, "w") as f:
-        f.write("\n".join(channels))
+def add_chat(chat_id):
+    chats = get_chats()
+    if chat_id not in chats:
+        with open(DB_FILE, "a") as f:
+            f.write(f"{chat_id}\n")
 
-
-# --- DUMMY WEB SERVER ---
-class DummyHandler(BaseHTTPRequestHandler):
+# --- WEB SERVER FOR RENDER ---
+class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header('Content-type','text/plain')
         self.end_headers()
-        self.wfile.write(b"Bot is perfectly running on Render!")
-    def log_message(self, format, *args):
-        pass
+        self.wfile.write(b"Bot is Live!")
+        return
 
 def run_web_server():
-    port = int(os.environ.get("PORT", 8080))
-    httpd = HTTPServer(('0.0.0.0', port), DummyHandler)
-    httpd.serve_forever()
+    server = HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 8080))), handler)
+    server.serve_forever()
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-
-# --- TELEGRAM BOT SETUP ---
+# --- BOT CLIENT ---
 app = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
-# 1. Naya /start (Auto-Tick Permissions ke saath)
+# 1. Start Command & Auto-Permission Link
 @app.on_message(filters.command("start") & filters.private)
-async def start_command(client, message):
-    bot = await client.get_me()
-    # Yahan 'invite_users' aur 'post_messages' auto-tick honge
-    add_link = f"https://t.me/{bot.username}?startchannel=true&admin=invite_users+post_messages"
+async def start(client, message):
+    bot_info = await client.get_me()
+    # Ye link permissions ko auto-tick (right) kar dega
+    # invite_users = Pending requests approve karne ke liye
+    # post_messages = Broadcast ke liye
+    auth_link = f"https://t.me/{bot_info.username}?startchannel=true&admin=invite_users+post_messages+manage_chat+change_info"
     
-    text = (
-        f"👋 Hello {message.from_user.first_name}!\n\n"
-        "Main ek **Super Admin Bot** hoon.\n\n"
-        "🟢 **Mera Kaam:**\n"
-        "1. Nayi Join Requests ko 1 second mein Auto-Accept karna.\n"
-        "2. Aapke saare channels mein ek saath Broadcast (Post) karna.\n\n"
-        "⚠️ **NOTE:** Telegram ke naye rules ke mutabik main PURANI requests ko ek saath accept nahi kar sakta. Unhe aapko ek baar khud accept karna hoga. Par NAYI requests main aane hi nahi dunga!\n\n"
-        "👇 **Neeche wale button se mujhe apne channel mein add karein:**"
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ ADD TO CHANNEL (Auto-Tick) ➕", url=auth_link)],
+        [InlineKeyboardButton("📢 UPDATES", url="https://t.me/BotNews")]
+    ])
+    
+    await message.reply_text(
+        f"👋 **Hello Admin!**\n\nMain aapke channels ki saari Join Requests auto-approve kar sakta hoon aur Broadcast bhi bhej sakta hoon.\n\n"
+        "Neeche wale button se mujhe channel mein add karein, permissions apne aap set ho jayengi!",
+        reply_markup=keyboard
     )
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✨ Add Bot To Channel ✨", url=add_link)]])
-    await message.reply_text(text, reply_markup=keyboard)
 
-
-# 2. Auto-Save Channel (Jaise hi bot channel mein add hoga, ID save kar lega broadcast ke liye)
-@app.on_message(filters.new_chat_members)
-async def bot_added(client, message):
-    bot = await client.get_me()
-    for member in message.new_chat_members:
-        if member.id == bot.id:
-            save_channel(message.chat.id)
-
-
-# 3. LIVE AUTO-APPROVE (Ye feature naye members ko automatically instantly add karega!)
+# 2. Auto-Approve NEW Requests (Jaise hi koi naya join karega)
 @app.on_chat_join_request()
-async def auto_approve(client, message):
+async def auto_approve(client, request):
+    chat_id = request.chat.id
+    user_id = request.from_user.id
     try:
-        await client.approve_chat_join_request(message.chat.id, message.from_user.id)
-        print(f"✅ Naya member add hua: {message.from_user.id}")
+        await client.approve_chat_join_request(chat_id, user_id)
+        add_chat(chat_id) # Broadcast list mein channel add karna
     except Exception as e:
-        print(f"Auto-Approve Error: {e}")
+        logging.error(f"Error approving: {e}")
 
-
-# 4. BROADCAST FEATURE (Sirf Aapke Liye)
-@app.on_message(filters.command(["admin", "broadcast"]) & filters.private)
-async def broadcast_message(client, message):
-    if message.from_user.id != ADMIN_ID:
-        return await message.reply_text("❌ Aap Admin nahi hain.")
+# 3. Accept ALL PENDING Requests (Purani bachi hui requests ke liye)
+@app.on_message(filters.command("acceptall") & filters.user(ADMIN_ID))
+async def accept_all(client, message):
+    if len(message.command) < 2:
+        return await message.reply_text("Sahi format: `/acceptall -100XXXXID`")
     
+    chat_id = int(message.command[1])
+    await message.reply_text("⏳ Saari pending requests accept ho rahi hain... thoda time lag sakta hai.")
+    try:
+        await client.approve_all_chat_join_requests(chat_id)
+        await message.reply_text("✅ Sabhi pending members ko channel mein add kar diya gaya hai!")
+    except Exception as e:
+        await message.reply_text(f"❌ Error: {e}")
+
+# 4. ADMIN BROADCAST FEATURE
+@app.on_message(filters.command("broadcast") & filters.user(ADMIN_ID))
+async def broadcast(client, message):
     if not message.reply_to_message:
-        return await message.reply_text("⚠️ Galti! Kisi message ya post ko reply karke `/broadcast` likhein.")
+        return await message.reply_text("Kisi message ko reply karke `/broadcast` likhein.")
     
-    channels = load_channels()
-    if not channels:
-        return await message.reply_text("❌ Mere paas kisi channel ka data nahi hai. Pehle mujhe channels mein add karein.")
+    chats = get_chats()
+    if not chats:
+        return await message.reply_text("Bot ke paas koi channel list nahi hai.")
     
-    await message.reply_text(f"⏳ {len(channels)} channels mein message bhej raha hoon...")
+    sent = 0
+    await message.reply_text(f"🚀 {len(chats)} channels mein post bhej raha hoon...")
     
-    success = 0
-    failed = 0
-    for chat_id in channels:
+    for chat_id in chats:
         try:
-            await message.reply_to_message.copy(int(chat_id))
-            success += 1
-            await asyncio.sleep(1) # Telegram ban se bachne ke liye delay
+            await message.reply_to_message.copy(chat_id)
+            sent += 1
+            await asyncio.sleep(0.3) # Flood wait se bachne ke liye
         except FloodWait as e:
             await asyncio.sleep(e.value)
-            await message.reply_to_message.copy(int(chat_id))
-            success += 1
         except Exception:
-            failed += 1
+            pass
             
-    await message.reply_text(f"✅ **Broadcast Complete!**\n\n🟢 Success: {success} channels\n🔴 Failed: {failed} channels")
+    await message.reply_text(f"✅ **Broadcast Done!**\nTotal: {sent} channels.")
 
+# Channel ID track karne ke liye
+@app.on_message(filters.new_chat_members)
+async def track_chats(client, message):
+    bot_id = (await client.get_me()).id
+    for member in message.new_chat_members:
+        if member.id == bot_id:
+            add_chat(message.chat.id)
+            await client.send_message(ADMIN_ID, f"Bot added to new channel: {message.chat.title} ({message.chat.id})")
 
-if __name__ == "__main__":
-    print("🚀 BOT START HO RAHA HAI...", flush=True)
-    app.run()
+print("Bot starting...")
+app.run()
